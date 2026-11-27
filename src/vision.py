@@ -1,5 +1,3 @@
-"""Fast screen capture, pixel matching, and OpenCV template matching."""
-
 import cv2
 import mss
 import numpy as np
@@ -8,32 +6,61 @@ from src.window import Rect
 
 
 class ScreenVision:
-    """Captures regions of a target window and checks pixels or UI templates."""
+    def __init__(self, image_path: str | None = None) -> None:
+        self._sct: mss.mss | None = None
+        self._static_frame: np.ndarray | None = None
+        if image_path is not None:
+            self.load_image(image_path)
 
-    def __init__(self) -> None:
-        self._sct = mss.mss()
+    def load_image(self, image_path: str) -> None:
+        """Load a static BGR screenshot for offline testing instead of live capture."""
+        frame = cv2.imread(image_path, cv2.IMREAD_COLOR)
+        if frame is None:
+            raise FileNotFoundError(f"Image not found: {image_path}")
+        self._static_frame = frame
+
+    def clear_image(self) -> None:
+        self._static_frame = None
+
+    def _get_sct(self) -> mss.mss:
+        if self._sct is None:
+            self._sct = mss.mss()
+        return self._sct
 
     def grab_region(
         self,
         rect: Rect,
         norm_region: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0),
     ) -> np.ndarray:
-        """Capture a normalized (x1, y1, x2, y2) region as a BGR numpy array."""
         x1, y1 = rect.norm_to_screen(norm_region[0], norm_region[1])
         x2, y2 = rect.norm_to_screen(norm_region[2], norm_region[3])
+
+        if self._static_frame is not None:
+            h, w = self._static_frame.shape[:2]
+            cx1, cy1 = max(0, min(w - 1, x1)), max(0, min(h - 1, y1))
+            cx2, cy2 = max(cx1 + 1, min(w, x2)), max(cy1 + 1, min(h, y2))
+            return self._static_frame[cy1:cy2, cx1:cx2]
+
         monitor = {
             "left": x1,
             "top": y1,
             "width": max(1, x2 - x1),
             "height": max(1, y2 - y1),
         }
-        raw = np.array(self._sct.grab(monitor))
-        return raw[:, :, :3]  # BGRA -> BGR
+        raw = np.array(self._get_sct().grab(monitor))
+        return raw[:, :, :3]
 
     def get_pixel_rgb(self, rect: Rect, norm_x: float, norm_y: float) -> tuple[int, int, int]:
-        """Sample a single pixel at normalized coordinates and return (R, G, B)."""
         sx, sy = rect.norm_to_screen(norm_x, norm_y)
-        raw = np.array(self._sct.grab({"left": sx, "top": sy, "width": 1, "height": 1}))
+
+        if self._static_frame is not None:
+            h, w = self._static_frame.shape[:2]
+            cx = max(0, min(w - 1, sx))
+            cy = max(0, min(h - 1, sy))
+            b, g, r = self._static_frame[cy, cx]
+            return int(r), int(g), int(b)
+
+        raw = np.array(self._get_sct().grab({"left": sx, "top": sy, "width": 1, "height": 1}))
         b, g, r = raw[0, 0, :3]
         return int(r), int(g), int(b)
 
@@ -45,7 +72,6 @@ class ScreenVision:
         target_rgb: tuple[int, int, int],
         tolerance: int = 15,
     ) -> bool:
-        """Check whether a pixel matches target_rgb within +/- tolerance per channel."""
         r, g, b = self.get_pixel_rgb(rect, norm_x, norm_y)
         tr, tg, tb = target_rgb
         return (
@@ -61,7 +87,6 @@ class ScreenVision:
         norm_region: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0),
         threshold: float = 0.85,
     ) -> tuple[float, float] | None:
-        """Find a template image inside norm_region and return its normalized center (x, y)."""
         template = cv2.imread(template_path, cv2.IMREAD_COLOR)
         if template is None:
             raise FileNotFoundError(f"Template not found: {template_path}")

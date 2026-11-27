@@ -1,9 +1,11 @@
-"""Windows window discovery, focusing, and coordinate normalization."""
-
 from dataclasses import dataclass
+import sys
 import time
-import win32con
-import win32gui
+
+IS_WINDOWS = sys.platform == "win32"
+if IS_WINDOWS:
+    import win32con
+    import win32gui
 
 
 @dataclass(frozen=True)
@@ -22,13 +24,11 @@ class Rect:
         return self.top + self.height
 
     def norm_to_screen(self, norm_x: float, norm_y: float) -> tuple[int, int]:
-        """Convert normalized (0.0-1.0) window coordinates to absolute screen pixels."""
         x = self.left + int(round(norm_x * self.width))
         y = self.top + int(round(norm_y * self.height))
         return x, y
 
     def screen_to_norm(self, screen_x: int, screen_y: int) -> tuple[float, float]:
-        """Convert absolute screen pixels to normalized (0.0-1.0) window coordinates."""
         if self.width <= 0 or self.height <= 0:
             return 0.0, 0.0
         nx = (screen_x - self.left) / self.width
@@ -37,21 +37,28 @@ class Rect:
 
 
 class WindowManager:
-    """Finds, focuses, and tracks a target Windows application window."""
-
-    def __init__(self, title_substring: str) -> None:
+    def __init__(
+        self,
+        title_substring: str,
+        dry_run: bool = not IS_WINDOWS,
+        mock_size: tuple[int, int] = (1920, 1080),
+    ) -> None:
         self.title_substring = title_substring.lower()
+        self.dry_run = dry_run or not IS_WINDOWS
+        self.mock_size = mock_size
         self.hwnd: int | None = None
 
     def find_window(self) -> int | None:
-        """Locate the first visible window whose title contains title_substring."""
+        if self.dry_run:
+            self.hwnd = 1
+            return self.hwnd
+
         matches: list[int] = []
 
         def _enum_cb(hwnd: int, _: object) -> None:
             if not win32gui.IsWindowVisible(hwnd):
                 return
-            title = win32gui.GetWindowText(hwnd)
-            if self.title_substring in title.lower():
+            if self.title_substring in win32gui.GetWindowText(hwnd).lower():
                 matches.append(hwnd)
 
         win32gui.EnumWindows(_enum_cb, None)
@@ -59,12 +66,14 @@ class WindowManager:
         return self.hwnd
 
     def is_focused(self) -> bool:
-        if not self.hwnd:
-            return False
-        return win32gui.GetForegroundWindow() == self.hwnd
+        if self.dry_run:
+            return True
+        return bool(self.hwnd and win32gui.GetForegroundWindow() == self.hwnd)
 
     def focus(self, wait_seconds: float = 0.25) -> bool:
-        """Restore if minimized and bring the target window to the foreground."""
+        if self.dry_run:
+            return True
+
         if not self.hwnd or not win32gui.IsWindow(self.hwnd):
             if not self.find_window():
                 return False
@@ -77,14 +86,16 @@ class WindowManager:
             try:
                 win32gui.SetForegroundWindow(self.hwnd)
             except Exception:
-                # Fallback: toggle topmost briefly if Windows blocks SetForegroundWindow
+                # Fallback if Windows blocks SetForegroundWindow
                 win32gui.ShowWindow(self.hwnd, win32con.SW_SHOW)
             time.sleep(wait_seconds)
 
         return self.is_focused()
 
     def get_rect(self) -> Rect | None:
-        """Return the window's bounding rectangle in screen coordinates."""
+        if self.dry_run:
+            return Rect(0, 0, self.mock_size[0], self.mock_size[1])
+
         if not self.hwnd or not win32gui.IsWindow(self.hwnd):
             if not self.find_window():
                 return None

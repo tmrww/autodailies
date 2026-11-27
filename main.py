@@ -1,5 +1,5 @@
-"""Starter pixel-based macro loop with F12 emergency stop."""
-
+import argparse
+import sys
 import time
 from pynput import keyboard
 
@@ -7,22 +7,33 @@ from src.input_ctrl import InputController
 from src.vision import ScreenVision
 from src.window import WindowManager
 
-TARGET_WINDOW = "Notepad"  # Change to "Genshin Impact", "Honkai: Star Rail", etc.
-TICK_INTERVAL = 0.25       # Seconds between screen checks
+TARGET_WINDOW = "Notepad"
+TICK_INTERVAL = 0.25
 
 
 class MacroRunner:
-    def __init__(self, target_window: str) -> None:
-        self.wm = WindowManager(target_window)
-        self.vision = ScreenVision()
-        self.inputs = InputController()
+    def __init__(
+        self,
+        target_window: str,
+        dry_run: bool = False,
+        image_path: str | None = None,
+    ) -> None:
+        self.dry_run = dry_run or sys.platform != "win32"
+        self.vision = ScreenVision(image_path=image_path)
+
+        mock_size = (1920, 1080)
+        if self.vision._static_frame is not None:
+            h, w = self.vision._static_frame.shape[:2]
+            mock_size = (w, h)
+
+        self.wm = WindowManager(target_window, dry_run=self.dry_run, mock_size=mock_size)
+        self.inputs = InputController(dry_run=self.dry_run)
         self.running = True
 
     def stop(self) -> None:
         self.running = False
 
     def step(self) -> None:
-        """One tick of your macro state machine."""
         if not self.wm.focus():
             print(f"Waiting for window '{self.wm.title_substring}'...")
             time.sleep(1.0)
@@ -32,23 +43,16 @@ class MacroRunner:
         if not rect:
             return
 
-        # Example 1: Pixel color check (replace coords/RGB using picker.py)
-        # if self.vision.is_pixel_color(rect, norm_x=0.5000, norm_y=0.8000, target_rgb=(255, 215, 0), tolerance=20):
-        #     self.inputs.click_norm(rect, 0.5000, 0.8000)
-        #     time.sleep(0.5)
+        # Add pixel/template rules here, e.g.:
+        # if self.vision.is_pixel_color(rect, 0.5, 0.8, (255, 215, 0)):
+        #     self.inputs.click_norm(rect, 0.5, 0.8)
 
-        # Example 2: Template image match inside a region
-        # match = self.vision.find_template(rect, "assets/claim_btn.png", norm_region=(0.6, 0.7, 1.0, 1.0))
-        # if match:
-        #     self.inputs.click_norm(rect, match[0], match[1])
-        #     time.sleep(0.5)
-
-        # Heartbeat sample at center of window so you can verify capture works
         center_rgb = self.vision.get_pixel_rgb(rect, 0.5, 0.5)
-        print(f"Focused | size={rect.width}x{rect.height} | center_rgb={center_rgb}")
+        mode = "DRY RUN" if self.dry_run else "LIVE"
+        print(f"[{mode}] size={rect.width}x{rect.height} | center_rgb={center_rgb}")
 
     def run(self) -> None:
-        print(f"Starting macro for '{self.wm.title_substring}'. Press [F12] to stop.")
+        print(f"Starting macro for '{self.wm.title_substring}' (dry_run={self.dry_run}). Press [F12] to stop.")
 
         def on_press(key: keyboard.Key | keyboard.KeyCode | None) -> bool | None:
             if key == keyboard.Key.f12:
@@ -72,5 +76,13 @@ class MacroRunner:
             print("Macro stopped.")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true", help="Log inputs instead of sending them")
+    parser.add_argument("--image", type=str, default=None, help="Test against a static screenshot file")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    MacroRunner(TARGET_WINDOW).run()
+    args = parse_args()
+    MacroRunner(TARGET_WINDOW, dry_run=args.dry_run, image_path=args.image).run()
